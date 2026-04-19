@@ -65,8 +65,22 @@ async def start(client, message):
     await message.reply_text(
         "👋 স্বাগতম! আমি আপনার ভিডিওগুলো সিরিয়াল অনুযায়ী নিখুঁতভাবে জোড়া লাগিয়ে দেব।\n\n"
         "১. একে একে আপনার ভিডিওগুলো পাঠান (এপিসোড ১, ২, ৩...)।\n"
-        "২. সব পাঠানো শেষ হলে **Done** লিখে মেসেজ দিন।"
+        "২. সব পাঠানো শেষ হলে **Done** লিখে মেসেজ দিন।\n"
+        "৩. ভুল ফাইল পাঠালে তা বাতিল করতে **/cancel** লিখুন।"
     )
+
+# --- ক্যানসেল কমান্ড ---
+@app.on_message(filters.command("cancel"))
+async def cancel_process(client, message):
+    chat_id = message.chat.id
+    if chat_id in user_data and user_data[chat_id]:
+        for path in user_data[chat_id]:
+            if os.path.exists(path):
+                os.remove(path)
+        user_data[chat_id] = []
+        await message.reply_text("❌ আপনার বর্তমান প্রসেসটি বাতিল করা হয়েছে এবং সব ভিডিও মুছে ফেলা হয়েছে। আপনি নতুন করে শুরু করতে পারেন।")
+    else:
+        await message.reply_text("আপনার কোনো প্রসেস বর্তমানে রানিং নেই।")
 
 @app.on_message(filters.video)
 async def handle_video(client, message):
@@ -90,7 +104,7 @@ async def handle_video(client, message):
     )
 
     user_data[chat_id].append(file_path)
-    await status_msg.edit_text(f"✅ এপিসোড {len(user_data[chat_id])} সফলভাবে যুক্ত হয়েছে।\nপরেরটি পাঠান অথবা **Done** লিখুন।")
+    await status_msg.edit_text(f"✅ এপিসোড {len(user_data[chat_id])} সফলভাবে যুক্ত হয়েছে।\nপরেরটি পাঠান অথবা **Done** লিখুন।\n\n(ভুল হলে **/cancel** লিখে সব মুছুন)")
 
 @app.on_message(filters.text & filters.regex("(?i)^done$"))
 async def merge_videos(client, message):
