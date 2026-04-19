@@ -3,30 +3,41 @@ import time
 import subprocess
 import asyncio
 from pyrogram import Client, filters
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# FFmpeg এর সমস্যা সমাধানের জন্য এটি যোগ করা হয়েছে
+# FFmpeg অটো-সেটআপ (সার্ভারে এরর বন্ধ করার জন্য)
 try:
     import static_ffmpeg
     static_ffmpeg.add_paths()
 except ImportError:
     pass
 
-# কনফিগারেশন
+# আপনার ভেরিয়েবলগুলো (ফিক্সড)
 API_ID = "19234664"
 API_HASH = "29c2f3b3d115cf1b0231d816deb271f5"
 BOT_TOKEN = "8710959010:AAHfutLem56XMMvNN9GG6n-xwJUiKYA2J7s"
 
 app = Client("video_merger", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# ইউজার ডাটা রাখার জন্য ডিকশনারি
+# ইউজার ডাটা ডিকশনারি
 user_data = {}
 
-# ডাউনলোড ফোল্ডার নিশ্চিত করা
+# ডাউনলোড ফোল্ডার তৈরি
 if not os.path.exists("downloads"):
     os.makedirs("downloads")
 
-# প্রোগ্রেস বার তৈরি করার ফাংশন
+# ভিডিওর সঠিক সময় (মিনিট/সেকেন্ড) বের করার ফাংশন
+def get_video_duration(file_path):
+    try:
+        cmd = [
+            "ffprobe", "-v", "error", "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1", file_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return int(float(result.stdout.strip()))
+    except Exception:
+        return 0
+
+# প্রোগ্রেস বার ফাংশন
 def progress_bar(current, total, status_msg, start_time, action):
     now = time.time()
     diff = now - start_time
@@ -39,8 +50,9 @@ def progress_bar(current, total, status_msg, start_time, action):
             ''.join(["□" for i in range(10 - int(percentage / 10))])
         )
         
-        tmp = f"{action}\n{progress} {round(percentage, 2)}%\n" \
-              f"সাইজ: {current/1024/1024:.2f}MB / {total/1024/1024:.2f}MB\n"
+        tmp = f"**{action}**\n\n{progress} {round(percentage, 2)}%\n" \
+              f"📊 সাইজ: {current/1024/1024:.2f}MB / {total/1024/1024:.2f}MB\n" \
+              f"🚀 স্পিড: {speed/1024:.2f} KB/s"
         
         try:
             status_msg.edit_text(tmp)
@@ -51,9 +63,9 @@ def progress_bar(current, total, status_msg, start_time, action):
 async def start(client, message):
     user_data[message.chat.id] = []
     await message.reply_text(
-        "স্বাগতম! আমি আপনার ভিডিওগুলো সিরিয়াল অনুযায়ী জোড়া লাগিয়ে দেব।\n\n"
-        "১. একে একে ভিডিও (এপিসোড) গুলো পাঠান।\n"
-        "২. সব পাঠানো শেষ হলে 'Done' লিখুন।"
+        "👋 স্বাগতম! আমি আপনার ভিডিওগুলো সিরিয়াল অনুযায়ী নিখুঁতভাবে জোড়া লাগিয়ে দেব।\n\n"
+        "১. একে একে আপনার ভিডিওগুলো পাঠান (এপিসোড ১, ২, ৩...)।\n"
+        "২. সব পাঠানো শেষ হলে **Done** লিখে মেসেজ দিন।"
     )
 
 @app.on_message(filters.video)
@@ -62,36 +74,35 @@ async def handle_video(client, message):
     if chat_id not in user_data:
         user_data[chat_id] = []
 
-    status_msg = await message.reply_text("ডাউনলোড শুরু হচ্ছে...", quote=True)
+    status_msg = await message.reply_text("📥 ভিডিওটি ডাউনলোড হচ্ছে...", quote=True)
     start_time = time.time()
 
-    # ডাউনলোড পাথ তৈরি
-    user_download_dir = f"downloads/{chat_id}"
-    if not os.path.exists(user_download_dir):
-        os.makedirs(user_download_dir)
+    # ইউজারের জন্য আলাদা সাব-ফোল্ডার
+    user_dir = f"downloads/{chat_id}"
+    if not os.path.exists(user_dir):
+        os.makedirs(user_dir)
 
-    # ভিডিও ফাইলটি ডাউনলোড করা
+    # ডাউনলোড করা
     file_path = await message.download(
-        file_name=f"{user_download_dir}/{time.time()}.mp4",
+        file_name=f"{user_dir}/{time.time()}.mp4",
         progress=progress_bar,
         progress_args=(status_msg, start_time, "📥 ডাউনলোড হচ্ছে...")
     )
 
     user_data[chat_id].append(file_path)
-    episode_num = len(user_data[chat_id])
-    await status_msg.edit_text(f"✅ এপিসোড {episode_num} যুক্ত হয়েছে।\nএখন পরের এপিসোড পাঠান অথবা 'Done' লিখুন।")
+    await status_msg.edit_text(f"✅ এপিসোড {len(user_data[chat_id])} সফলভাবে যুক্ত হয়েছে।\nপরেরটি পাঠান অথবা **Done** লিখুন।")
 
 @app.on_message(filters.text & filters.regex("(?i)^done$"))
 async def merge_videos(client, message):
     chat_id = message.chat.id
     
     if chat_id not in user_data or len(user_data[chat_id]) < 2:
-        await message.reply_text("কমপক্ষে ২টি ভিডিও পাঠাতে হবে!")
+        await message.reply_text("❌ ভিডিও জোড়া লাগাতে কমপক্ষে ২টি ভিডিও পাঠাতে হবে!")
         return
 
-    status_msg = await message.reply_text("⚙️ ভিডিওগুলো জোড়া লাগানো হচ্ছে (Merging)... দয়া করে অপেক্ষা করুন।")
+    status_msg = await message.reply_text("⚙️ ভিডিওগুলো প্রসেস করা হচ্ছে... দয়া করে অপেক্ষা করুন।")
     
-    output_filename = f"final_{chat_id}.mp4"
+    output_filename = f"final_video_{chat_id}.mp4"
     list_filename = f"list_{chat_id}.txt"
 
     try:
@@ -100,30 +111,34 @@ async def merge_videos(client, message):
             for path in user_data[chat_id]:
                 f.write(f"file '{os.path.abspath(path)}'\n")
 
-        # FFmpeg কমান্ড (ভিডিও কপি মোড - অনেক দ্রুত কাজ করবে)
+        # ধাপ ১: ভিডিওগুলো মার্জ করা (Fast Copy Mode + Faststart)
         cmd = [
-            "ffmpeg", "-f", "concat", "-safe", "0",
-            "-i", list_filename, "-c", "copy", output_filename
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+            "-i", list_filename, "-c", "copy", "-movflags", "+faststart", output_filename
         ]
         
-        process = subprocess.run(cmd, capture_output=True, text=True)
+        merge_process = subprocess.run(cmd, capture_output=True, text=True)
 
-        if process.returncode != 0:
-            # যদি 'copy' মোড ফেল করে তবে এনকোডিং মোড ট্রাই করবে
-            await status_msg.edit_text("⚙️ ভিডিও ফরম্যাট ভিন্ন হওয়ায় এনকোডিং হচ্ছে... সময় লাগতে পারে।")
+        # যদি ভিডিও ফরম্যাট ভিন্ন হওয়ার কারণে 'copy' মোড ফেল করে
+        if merge_process.returncode != 0:
+            await status_msg.edit_text("⚠️ ভিডিওর ফরম্যাট ভিন্ন, তাই এনকোডিং শুরু হচ্ছে (এতে একটু বেশি সময় লাগতে পারে)...")
             cmd_encode = [
-                "ffmpeg", "-f", "concat", "-safe", "0",
-                "-i", list_filename, output_filename
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0",
+                "-i", list_filename, "-movflags", "+faststart", output_filename
             ]
             subprocess.run(cmd_encode, check=True)
 
-        # আপলোড করা
-        await status_msg.edit_text("📤 আপলোড শুরু হচ্ছে...")
+        # ধাপ ২: ভিডিওর সঠিক দৈর্ঘ্য (সময়) বের করা
+        duration = get_video_duration(output_filename)
+
+        # ধাপ ৩: আপলোড করা
+        await status_msg.edit_text("📤 ভিডিও তৈরি! এখন আপলোড হচ্ছে...")
         start_time = time.time()
         
         await message.reply_video(
             video=output_filename,
-            caption=f"🎬 আপনার সম্পূর্ণ ভিডিও তৈরি হয়ে গেছে!\nমোট {len(user_data[chat_id])} টি এপিসোড যুক্ত করা হয়েছে।",
+            duration=duration,  # এটি ভিডিওর মিনিট/সেকেন্ড ফিক্স করবে
+            caption=f"🎬 **আপনার ভিডিওটি তৈরি!**\n\n✅ মোট এপিসোড: {len(user_data[chat_id])}\n📊 সময়: {time.strftime('%H:%M:%S', time.gmtime(duration))}",
             progress=progress_bar,
             progress_args=(status_msg, start_time, "📤 আপলোড হচ্ছে...")
         )
@@ -134,7 +149,7 @@ async def merge_videos(client, message):
         await message.reply_text(f"❌ সমস্যা হয়েছে: {str(e)}")
     
     finally:
-        # ফাইল পরিষ্কার করা
+        # সব টেম্পোরারি ফাইল মুছে ফেলা
         if os.path.exists(list_filename): os.remove(list_filename)
         if os.path.exists(output_filename): os.remove(output_filename)
         if chat_id in user_data:
@@ -142,5 +157,5 @@ async def merge_videos(client, message):
                 if os.path.exists(path): os.remove(path)
             user_data[chat_id] = []
 
-print("বটটি সফলভাবে চালু হয়েছে...")
+print("🔥 বটটি সফলভাবে চালু হয়েছে এবং কাজ করার জন্য প্রস্তুত!")
 app.run()
