@@ -77,10 +77,10 @@ async def edit_heartbeat(status_msg, start_time):
         while True:
             elapsed = round(time.time() - start_time)
             icon = icons[idx % 4]
-            text = (f"{icon} **ফেসবুক স্টাইলে প্রসেস হচ্ছে...**\n\n"
+            text = (f"{icon} **ফেসবুক স্টাইলে সুপার ফাস্ট প্রসেস হচ্ছে...**\n\n"
                     f"⏱ সময় অতিবাহিত: {elapsed} সেকেন্ড\n"
-                    f"⚙️ FFmpeg ভিডিওটি রেন্ডার করছে, দয়া করে অপেক্ষা করুন।\n"
-                    f"⚠️ ভিডিও বড় হলে একটু বেশি সময় লাগতে পারে।")
+                    f"🚀 আল্ট্রাফাস্ট এনকোডিং মোড চালু করা হয়েছে।\n"
+                    f"⚠️ ৫১২এমবি র‍্যামে সেরা পারফরম্যান্সের জন্য প্রসেসিং চলছে।")
             await status_msg.edit_text(text)
             idx += 1
             await asyncio.sleep(8) # প্রতি ৮ সেকেন্ডে একবার আপডেট
@@ -209,15 +209,23 @@ async def handle_video(client, message):
         out_v = f"fb_edit_{chat_id}_{time.time()}.mp4"
         bgm = user_data[chat_id]["music"]
         
-        # FFmpeg কমান্ড: মেইন সাউন্ড ১.৮ গুণ + মিউজিক ৩% + ফেসবুক কালার ফিল্টার
+        # --- নতুন সুপার ফাস্ট কমান্ড (৫১২ এমবি র‍্যাম ও স্পিডের জন্য) ---
         cmd = [
             "ffmpeg", "-y", "-i", v_path, "-i", bgm,
             "-filter_complex", 
-            "[0:v]eq=saturation=1.4:contrast=1.2:brightness=0.03[v];"
+            # র‍্যাম বাঁচাতে রেজোলিউশন ৭২০পি করা হয়েছে ও কালার টিউন করা হয়েছে
+            "[0:v]scale=-2:720,eq=saturation=1.4:contrast=1.2:brightness=0.03[v];"
             "[0:a]volume=1.8[a1];"
             "[1:a]volume=0.03[a2];"
             "[a1][a2]amix=inputs=2:duration=first[a]",
-            "-map", "[v]", "-map", "[a]", "-c:v", "libx264", "-preset", "fast", "-movflags", "+faststart", out_v
+            "-map", "[v]", "-map", "[a]", 
+            "-c:v", "libx264", 
+            "-preset", "ultrafast",  # ফাস্ট রেন্ডারিংয়ের জন্য
+            "-crf", "28",            # সাইজ ও র‍্যাম ম্যানেজমেন্ট
+            "-threads", "0",         # সব CPU কোর ব্যবহারের জন্য
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart", 
+            out_v
         ]
         
         process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
@@ -232,7 +240,7 @@ async def handle_video(client, message):
         await message.reply_video(
             video=out_v, 
             duration=duration, 
-            caption="🎬 **আপনার ফেসবুক শর্টস ভিডিও রেডি!**\n\n(সাউন্ড ও কালার অটো টিউন করা হয়েছে)",
+            caption="🎬 **আপনার ফেসবুক শর্টস ভিডিও রেডি!**\n\n(সাউন্ড ও কালার সুপার ফাস্ট মোডে টিউন করা হয়েছে)",
             thumb=user_data[chat_id].get("thumb"),
             progress=progress_bar,
             progress_args=(status_msg, time.time(), "📤 আপলোড হচ্ছে...")
@@ -293,10 +301,10 @@ async def merge_videos_done(client, message):
         cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_filename, "-c", "copy", "-movflags", "+faststart", output_filename]
         merge_process = subprocess.run(cmd, capture_output=True, text=True)
 
-        # ফরম্যাট আলাদা হলে এনকোডিং
+        # ফরম্যাট আলাদা হলে এনকোডিং (এখানেও আল্ট্রাফাস্ট দেওয়া হয়েছে স্পিডের জন্য)
         if merge_process.returncode != 0:
             await status_msg.edit_text("⚠️ ফরম্যাট আলাদা হওয়ায় এনকোডিং হচ্ছে (সময় লাগবে)...")
-            cmd_encode = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_filename, "-movflags", "+faststart", output_filename]
+            cmd_encode = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_filename, "-c:v", "libx264", "-preset", "ultrafast", "-threads", "0", "-movflags", "+faststart", output_filename]
             subprocess.run(cmd_encode, check=True)
 
         duration = get_video_duration(output_filename)
@@ -333,5 +341,5 @@ async def merge_videos_done(client, message):
             user_data[chat_id]["files"] = []
             user_data[chat_id]["total_size"] = 0
 
-print("🚀 বটটি বিস্তারিত ফিচারসহ পূর্ণাঙ্গভাবে সচল!")
+print("🚀 বটটি বিস্তারিত ফিচার ও সুপার ফাস্ট স্পিডসহ পূর্ণাঙ্গভাবে সচল!")
 app.run()
