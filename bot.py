@@ -14,7 +14,7 @@ except ImportError:
     pass
 
 # --- আপনার ভেরিয়েবলসমূহ ---
-API_ID = "19234664"
+API_ID = 19234664  # এখানে কোটেশন মার্ক তুলে সংখ্যা করা হয়েছে (অত্যন্ত গুরুত্বপূর্ণ)
 API_HASH = "29c2f3b3d115cf1b0231d816deb271f5"
 BOT_TOKEN = "8710959010:AAHfutLem56XMMvNN9GG6n-xwJUiKYA2J7s"
 MAX_LIMIT = 2000 * 1024 * 1024  # ২জিবি লিমিট (বাইটসে)
@@ -23,8 +23,12 @@ app = Client("video_merger", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOK
 
 user_data = {}
 
-# --- অ্যাবসলিউট ডাউনলোড ডিরেক্টরি পাথ সেটআপ ---
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# --- অ্যাবসলিউট ডাউনলোড ডিরেক্টরি পাথ সেটআপ (সার্ভার ফ্রেন্ডলি ব্যাকআপসহ) ---
+try:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+except NameError:
+    BASE_DIR = os.getcwd()
+
 DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
 
 if not os.path.exists(DOWNLOAD_DIR):
@@ -54,18 +58,16 @@ def get_video_duration(file_path):
     except Exception:
         return 0
 
-# --- আল্ট্রাফাস্ট TS রেমক্সিং ফাংশন (ভিডিওর পিক্সেল টাচ না করে কেবল স্ট্রিম ফরম্যাট ঠিক করে) ---
+# --- আল্ট্রাফাস্ট TS রেমক্সিং ফাংশন ---
 async def fast_remux_to_ts(input_path, output_path):
     audio_present = has_audio(input_path)
     
-    # ভিডিও স্ট্রিম সরাসরি কপি করা হচ্ছে (-c:v copy), কোনো ডিকোডিং বা রেন্ডারিং হবে না (সুপার ফাস্ট)
     if audio_present:
         cmd = [
             "ffmpeg", "-y", "-i", input_path, 
             "-c", "copy", "-f", "mpegts", output_path
         ]
     else:
-        # কোনো ফাইলে অডিও না থাকলে মার্জিং ভাঙা এড়াতে নীরব অডিও ট্র্যাক যুক্ত করা হচ্ছে
         cmd = [
             "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
             "-i", input_path, 
@@ -300,7 +302,7 @@ async def handle_video(client, message):
         await status_msg.delete()
         return
 
-    # খ) সাধারণ মার্জিং মোড (এখানে ডাউনলোড করার সাথে সাথে কোনো কনভার্ট হবে না - সম্পূর্ণ ইনস্ট্যান্ট)
+    # খ) সাধারণ মার্জিং মোড
     if user_data[chat_id]["total_size"] >= MAX_LIMIT:
         await message.reply_text("⚠️ লিমিট শেষ! আপনি ২জিবি পূর্ণ করে ফেলেছেন। এখন **Done** লিখুন।")
         return
@@ -322,7 +324,6 @@ async def handle_video(client, message):
     used_mb = user_data[chat_id]["total_size"] / (1024 * 1024)
     remaining_mb = (MAX_LIMIT - user_data[chat_id]["total_size"]) / (1024 * 1024)
 
-    # ডাউনলোড হওয়ামাত্রই কোনো ল্যাগ ছাড়া সরাসরি কিউতে যুক্ত হয়ে যাবে
     await status_msg.edit_text(
         f"✅ এপিসোড {len(user_data[chat_id]['files'])} যুক্ত হয়েছে।\n\n"
         f"📊 **স্টোরেজ রিপোর্ট:**\n"
@@ -346,7 +347,6 @@ async def merge_videos_done(client, message):
     
     try:
         # ১. প্রতিটি ভিডিও ফাইলকে প্রথমে অতি দ্রুত MPEG-TS (.ts) ফরম্যাটে রেমক্স করা হচ্ছে।
-        # এটি কোনো ডিকোডিং ছাড়া সরাসরি ফাইল কপি করে, তাই ভিডিও কোয়ালিটি লস হবে না এবং কয়েক সেকেন্ডেই শেষ হবে।
         for idx, file_path in enumerate(user_data[chat_id]["files"]):
             ts_path = os.path.join(DOWNLOAD_DIR, f"temp_{chat_id}_{idx}.ts")
             await fast_remux_to_ts(file_path, ts_path)
@@ -357,7 +357,7 @@ async def merge_videos_done(client, message):
             await status_msg.edit_text("❌ ভিডিও কনভার্ট করতে ত্রুটি হয়েছে!")
             return
 
-        # ২. .ts ফাইলগুলোকে raw বাইট স্ট্রিমের মাধ্যমে সরাসরি জোড়া লাগানো হচ্ছে (এটি ১-২ সেকেন্ডে মার্জ হয়ে যাবে)
+        # ২. .ts ফাইলগুলোকে raw বাইট স্ট্রিমের মাধ্যমে সরাসরি জোড়া লাগানো হচ্ছে
         concat_input = "concat:" + "|".join(ts_files)
         
         cmd = [
