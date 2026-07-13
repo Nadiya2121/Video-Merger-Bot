@@ -6,7 +6,7 @@ from pyrogram import Client, filters
 from pyrogram.types import Message
 from pyrogram.errors import MessageNotModified, FloodWait
 
-# FFmpeg অটো-সেটআপ (সার্ভারের এরর বন্ধ করতে)
+# FFmpeg অটো-সেটআপ
 try:
     import static_ffmpeg
     static_ffmpeg.add_paths()
@@ -24,9 +24,12 @@ app = Client("video_merger", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOK
 # ইউজার ডাটা স্টোর করার ডিকশনারি
 user_data = {}
 
-# ডাউনলোড ফোল্ডার নিশ্চিত করা
-if not os.path.exists("downloads"):
-    os.makedirs("downloads")
+# --- অ্যাবসলিউট ডাউনলোড ডিরেক্টরি পাথ সেটআপ ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DOWNLOAD_DIR = os.path.join(BASE_DIR, "downloads")
+
+if not os.path.exists(DOWNLOAD_DIR):
+    os.makedirs(DOWNLOAD_DIR)
 
 # --- ভিডিওতে অডিও ট্র্যাক আছে কিনা তা চেক করার ফাংশন ---
 def has_audio(file_path):
@@ -52,29 +55,33 @@ def get_video_duration(file_path):
     except Exception:
         return 0
 
-# --- ভিডিও স্ট্যান্ডার্ডাইজ করার প্রধান ফাংশন ---
-# এটি যেকোনো রেজোলিউশন বা ফরম্যাটের ভিডিওকে একই ফ্রেমরেট, রেজোলিউশন ও অডিও লেআউটে নিয়ে আসে।
+# --- ভিডিও স্ট্যান্ডার্ডাইজ করার অপ্টিমাইজড ও দ্রুতগতির ফাংশন ---
 async def normalize_video(input_path, output_path):
-    # ভিডিওতে অডিও না থাকলে কৃত্রিম নীরব অডিও ট্র্যাক যুক্ত করা হয় যাতে মার্জ করার পর প্লেয়ার ক্র্যাশ না করে।
     audio_present = has_audio(input_path)
     
+    # -threads 0 এবং -sws_flags fast_bilinear ব্যবহারের মাধ্যমে প্রসেসিং স্পিড বাড়ানো হয়েছে
     if audio_present:
         cmd = [
-            "ffmpeg", "-y", "-i", input_path,
+            "ffmpeg", "-y", 
+            "-threads", "0",
+            "-sws_flags", "fast_bilinear",
+            "-i", input_path,
             "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
             "-r", "30",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
             "-c:a", "aac", "-ar", "44100", "-ac", "2",
             output_path
         ]
     else:
-        # নীরব অডিও যুক্ত করার কমান্ড
         cmd = [
-            "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100", 
+            "ffmpeg", "-y", 
+            "-threads", "0",
+            "-sws_flags", "fast_bilinear",
+            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100", 
             "-i", input_path,
             "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
             "-r", "30",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
             "-c:a", "aac", "-shortest",
             output_path
         ]
@@ -170,7 +177,8 @@ async def set_music(client, message):
         user_data[chat_id] = {"files": [], "total_size": 0, "music": None, "state": "none"}
     
     status = await message.reply_text("🎵 ব্যাকগ্রাউন্ড মিউজিক সেভ হচ্ছে...")
-    music_path = await message.reply_to_message.download(file_name=f"downloads/{chat_id}_bgm.mp3")
+    music_filename = os.path.join(DOWNLOAD_DIR, f"{chat_id}_bgm.mp3")
+    music_path = await message.reply_to_message.download(file_name=music_filename)
     user_data[chat_id]["music"] = music_path
     await status.edit_text("✅ মিউজিক সেভ হয়েছে! এখন ফেসবুক এডিট করতে চাইলে **/edit** লিখে ভিডিও পাঠান।")
 
@@ -193,12 +201,19 @@ async def handle_thumb(client, message):
         user_data[chat_id] = {"files": [], "total_size": 0, "thumb": None}
     
     if user_data[chat_id]["thumb"] and os.path.exists(user_data[chat_id]["thumb"]):
-        os.remove(user_data[chat_id]["thumb"])
+        try:
+            os.remove(user_data[chat_id]["thumb"])
+        except Exception:
+            pass
 
     status = await message.reply_text("📸 থাম্বনেইল ডাউনলোড হচ্ছে...")
-    path = await message.download(file_name=f"downloads/{chat_id}_thumb.jpg")
-    user_data[chat_id]["thumb"] = path
-    await status.edit_text("✅ থাম্বনেইল সেট হয়েছে!")
+    thumb_path = os.path.join(DOWNLOAD_DIR, f"{chat_id}_thumb.jpg")
+    try:
+        path = await message.download(file_name=thumb_path)
+        user_data[chat_id]["thumb"] = path
+        await status.edit_text("✅ থাম্বনেইল সেট হয়েছে!")
+    except Exception as e:
+        await status.edit_text(f"❌ থাম্বনেইল সেভ করতে সমস্যা হয়েছে: {str(e)}")
 
 # --- নাম সেট করা ---
 @app.on_message(filters.command("setname"))
@@ -222,6 +237,8 @@ async def cancel_process(client, message):
             if os.path.exists(path): os.remove(path)
         if user_data[chat_id].get("music") and os.path.exists(user_data[chat_id]["music"]):
             os.remove(user_data[chat_id]["music"])
+        if user_data[chat_id].get("thumb") and os.path.exists(user_data[chat_id]["thumb"]):
+            os.remove(user_data[chat_id]["thumb"])
         del user_data[chat_id]
         await message.reply_text("❌ সব বাতিল এবং ফাইল মুছে ফেলা হয়েছে।")
     else:
@@ -230,7 +247,6 @@ async def cancel_process(client, message):
 # --- ভিডিও হ্যান্ডলার ---
 @app.on_message(filters.video | filters.document)
 async def handle_video(client, message):
-    # ভিডিও অথবা ভিডিও ডকুমেন্ট চেক করা
     if message.document and not message.document.mime_type.startswith("video/"):
         return
 
@@ -244,7 +260,9 @@ async def handle_video(client, message):
         status_msg = await message.reply_text("📥 এডিটিংয়ের জন্য ভিডিও ডাউনলোড হচ্ছে...", quote=True)
         start_time = time.time()
         
+        video_download_path = os.path.join(DOWNLOAD_DIR, f"fb_dl_{chat_id}_{time.time()}")
         v_path = await message.download(
+            file_name=video_download_path,
             progress=progress_bar, 
             progress_args=(status_msg, start_time, "📥 ডাউনলোড হচ্ছে...")
         )
@@ -252,11 +270,14 @@ async def handle_video(client, message):
         edit_start_time = time.time()
         heartbeat_task = asyncio.create_task(edit_heartbeat(status_msg, edit_start_time))
         
-        out_v = f"downloads/fb_edit_{chat_id}_{time.time()}.mp4"
+        out_v = os.path.join(DOWNLOAD_DIR, f"fb_edit_{chat_id}_{time.time()}.mp4")
         bgm = user_data[chat_id]["music"]
         
         cmd = [
-            "ffmpeg", "-y", "-i", v_path, "-i", bgm,
+            "ffmpeg", "-y", 
+            "-threads", "0",
+            "-sws_flags", "fast_bilinear",
+            "-i", v_path, "-i", bgm,
             "-filter_complex", 
             "[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,eq=saturation=1.4:contrast=1.2:brightness=0.03[v];"
             "[0:a]volume=1.8[a1];"
@@ -265,8 +286,7 @@ async def handle_video(client, message):
             "-map", "[v]", "-map", "[a]", 
             "-c:v", "libx264", 
             "-preset", "ultrafast",  
-            "-crf", "28",            
-            "-threads", "0",         
+            "-crf", "32",            
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart", 
             out_v
@@ -302,25 +322,26 @@ async def handle_video(client, message):
     status_msg = await message.reply_text("📥 ভিডিওটি ডাউনলোড করা হচ্ছে...", quote=True)
     start_time = time.time()
     
+    video_download_path = os.path.join(DOWNLOAD_DIR, f"merge_dl_{chat_id}_{time.time()}")
     file_path = await message.download(
+        file_name=video_download_path,
         progress=progress_bar,
         progress_args=(status_msg, start_time, "📥 ডাউনলোড হচ্ছে...")
     )
 
-    # আপলোড করা ভিডিওর ফরম্যাট যাই হোক না কেন, সেটিকে স্ট্যান্ডার্ড এমপি৪ (720p, 30fps) এ রূপান্তর করা হচ্ছে
-    await status_msg.edit_text("⚙️ ভিডিও ফরম্যাট চেক করে স্ট্যান্ডার্ডাইজ করা হচ্ছে...")
-    norm_file_path = f"downloads/norm_{chat_id}_{time.time()}.mp4"
+    # স্ট্যান্ডার্ড ফরম্যাটে দ্রুত রূপান্তর
+    await status_msg.edit_text("⚙️ ভিডিও ফরম্যাট স্ট্যান্ডার্ডাইজ করা হচ্ছে...")
+    norm_file_path = os.path.join(DOWNLOAD_DIR, f"norm_{chat_id}_{time.time()}.mp4")
     
     is_normalized = await normalize_video(file_path, norm_file_path)
     
-    # মেমোরি খালি করতে মূল ডনলোডকৃত ফাইল ডিলিট করা হচ্ছে
     if os.path.exists(file_path): 
         os.remove(file_path)
         
     if is_normalized and os.path.exists(norm_file_path):
         final_file_path = norm_file_path
     else:
-        final_file_path = file_path  # কোনো কারণে ব্যর্থ হলে আগের ফাইলটিই ব্যবহার হবে
+        final_file_path = file_path
 
     f_size = os.path.getsize(final_file_path)
     user_data[chat_id]["files"].append(final_file_path)
@@ -346,28 +367,34 @@ async def merge_videos_done(client, message):
         return
 
     status_msg = await message.reply_text("⚙️ ভিডিওগুলো জোড়া লাগানো হচ্ছে... একটু অপেক্ষা করুন।")
-    output_filename = user_data[chat_id].get("filename", f"merged_{chat_id}.mp4")
-    list_filename = f"list_{chat_id}.txt"
+    output_filename = os.path.join(DOWNLOAD_DIR, user_data[chat_id].get("filename", f"merged_{chat_id}.mp4"))
+    list_filename = os.path.join(DOWNLOAD_DIR, f"list_{chat_id}.txt")
 
     try:
         with open(list_filename, "w") as f:
             for path in user_data[chat_id]["files"]:
                 f.write(f"file '{os.path.abspath(path)}'\n")
 
-        # যেহেতু ইনপুটের প্রতিটি ফাইলের স্পেসিফিকেশন এখন হুবহু এক, তাই এই মার্জিংটি অত্যন্ত মসৃণ হবে।
+        # দ্রুত কপি মার্জিং
         cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_filename, "-c", "copy", "-movflags", "+faststart", output_filename]
         merge_process = subprocess.run(cmd, capture_output=True, text=True)
 
         if merge_process.returncode != 0:
             await status_msg.edit_text("⚠️ প্রথম ধাপে সমস্যা হয়েছে, পুনরায় এনকোড করে ট্রাই করা হচ্ছে...")
-            cmd_encode = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_filename, "-c:v", "libx264", "-preset", "ultrafast", "-threads", "0", "-movflags", "+faststart", output_filename]
+            cmd_encode = [
+                "ffmpeg", "-y", 
+                "-threads", "0",
+                "-f", "concat", "-safe", "0", "-i", list_filename, 
+                "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32", 
+                "-movflags", "+faststart", output_filename
+            ]
             subprocess.run(cmd_encode, check=True)
 
         duration = get_video_duration(output_filename)
         await status_msg.edit_text("📤 মার্জ শেষ! এখন আপলোড হচ্ছে...")
         
         video_caption = (
-            f"🎬 **ফাইল নেম:** `{output_filename}`\n\n"
+            f"🎬 **ফাইল নেম:** `{os.path.basename(output_filename)}`\n\n"
             f"✅ **মোট ফাইল:** {len(user_data[chat_id]['files'])}\n"
             f"📊 **সাইজ:** {os.path.getsize(output_filename)/(1024*1024):.2f} MB\n"
             f"⏳ **সময়:** {time.strftime('%H:%M:%S', time.gmtime(duration))}"
