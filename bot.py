@@ -28,7 +28,19 @@ user_data = {}
 if not os.path.exists("downloads"):
     os.makedirs("downloads")
 
-# --- ফাংশন ১: ভিডিওর সঠিক সময় (ডিউরেশন) বের করা ---
+# --- ভিডিওতে অডিও ট্র্যাক আছে কিনা তা চেক করার ফাংশন ---
+def has_audio(file_path):
+    try:
+        cmd = [
+            "ffprobe", "-v", "error", "-select_streams", "a", 
+            "-show_entries", "stream=codec_name", "-of", "csv=p=0", file_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return len(result.stdout.strip()) > 0
+    except Exception:
+        return False
+
+# --- ভিডিওর সঠিক সময় (ডিউরেশন) বের করা ---
 def get_video_duration(file_path):
     try:
         cmd = [
@@ -40,11 +52,43 @@ def get_video_duration(file_path):
     except Exception:
         return 0
 
-# --- ফাংশন ২: উন্নত প্রোগ্রেস বার (এরর হ্যান্ডলিং ও ডিটেইলস সহ) ---
+# --- ভিডিও স্ট্যান্ডার্ডাইজ করার প্রধান ফাংশন ---
+# এটি যেকোনো রেজোলিউশন বা ফরম্যাটের ভিডিওকে একই ফ্রেমরেট, রেজোলিউশন ও অডিও লেআউটে নিয়ে আসে।
+async def normalize_video(input_path, output_path):
+    # ভিডিওতে অডিও না থাকলে কৃত্রিম নীরব অডিও ট্র্যাক যুক্ত করা হয় যাতে মার্জ করার পর প্লেয়ার ক্র্যাশ না করে।
+    audio_present = has_audio(input_path)
+    
+    if audio_present:
+        cmd = [
+            "ffmpeg", "-y", "-i", input_path,
+            "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+            "-r", "30",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-c:a", "aac", "-ar", "44100", "-ac", "2",
+            output_path
+        ]
+    else:
+        # নীরব অডিও যুক্ত করার কমান্ড
+        cmd = [
+            "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100", 
+            "-i", input_path,
+            "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+            "-r", "30",
+            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "28",
+            "-c:a", "aac", "-shortest",
+            output_path
+        ]
+        
+    process = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+    )
+    await process.communicate()
+    return process.returncode == 0
+
+# --- উন্নত প্রোগ্রেস বার ---
 async def progress_bar(current, total, status_msg, start_time, action):
     now = time.time()
     diff = now - start_time
-    # প্রতি ৫ সেকেন্ড পরপর আপডেট হবে যাতে টেলিগ্রাম ফ্লাড না করে
     if round(diff % 5.0) == 0 or current == total:
         percentage = current * 100 / total
         speed = current / (diff if diff > 0 else 1)
@@ -68,9 +112,8 @@ async def progress_bar(current, total, status_msg, start_time, action):
         except Exception:
             pass
 
-# --- ফাংশন ৩: প্রসেসিং হার্টবিট (ফেসবুক এডিটিংয়ের সময় টাইমার দেখানোর জন্য) ---
+# --- প্রসেসিং হার্টবিট ---
 async def edit_heartbeat(status_msg, start_time):
-    # এই টাস্কটি ভিডিও রেন্ডার হওয়ার সময় ইউজারকে টাইমার দেখাবে
     icons = ["⚙️", "🪄", "⏳", "⌛"]
     idx = 0
     try:
@@ -83,11 +126,11 @@ async def edit_heartbeat(status_msg, start_time):
                     f"⚠️ ৫১২এমবি র‍্যামে সেরা পারফরম্যান্সের জন্য প্রসেসিং চলছে।")
             await status_msg.edit_text(text)
             idx += 1
-            await asyncio.sleep(8) # প্রতি ৮ সেকেন্ডে একবার আপডেট
+            await asyncio.sleep(8)
     except Exception:
         pass
 
-# --- ৪. স্টার্ট কমান্ড (বিস্তারিত গাইড) ---
+# --- স্টার্ট কমান্ড ---
 @app.on_message(filters.command("start"))
 async def start(client, message):
     chat_id = message.chat.id
@@ -115,7 +158,7 @@ async def start(client, message):
     )
     await message.reply_text(welcome_text)
 
-# --- ৫. মিউজিক সেট করার কমান্ড ---
+# --- মিউজিক সেট করার কমান্ড ---
 @app.on_message(filters.command("setmusic"))
 async def set_music(client, message):
     chat_id = message.chat.id
@@ -131,7 +174,7 @@ async def set_music(client, message):
     user_data[chat_id]["music"] = music_path
     await status.edit_text("✅ মিউজিক সেভ হয়েছে! এখন ফেসবুক এডিট করতে চাইলে **/edit** লিখে ভিডিও পাঠান।")
 
-# --- ৬. ফেসবুক এডিট মোড চালু ---
+# --- ফেসবুক এডিট মোড চালু ---
 @app.on_message(filters.command("edit"))
 async def activate_edit_mode(client, message):
     chat_id = message.chat.id
@@ -140,9 +183,9 @@ async def activate_edit_mode(client, message):
         return
     
     user_data[chat_id]["state"] = "waiting_for_edit"
-    await message.reply_text("🪄 **ফেসবুক এডিট মোড চালু!**\nএখন আপনার শর্টস ভিডিওটি পাঠান। আমি এটিতে সাউন্ড ও কালার ফিল্টার লাগিয়ে দেব।")
+    await message.reply_text("🪄 **ফেসবুক এডিট মোড চালু!**\nএখন আপনার শর্টস ভিডিওটি পাঠান। আমি এটিটিতে সাউন্ড ও কালার ফিল্টার লাগিয়ে দেব।")
 
-# --- ৭. থাম্বনেইল সেট করা ---
+# --- থাম্বনেইল সেট করা ---
 @app.on_message(filters.photo)
 async def handle_thumb(client, message):
     chat_id = message.chat.id
@@ -157,7 +200,7 @@ async def handle_thumb(client, message):
     user_data[chat_id]["thumb"] = path
     await status.edit_text("✅ থাম্বনেইল সেট হয়েছে!")
 
-# --- ৮. নাম সেট করা ---
+# --- নাম সেট করা ---
 @app.on_message(filters.command("setname"))
 async def set_name(client, message):
     chat_id = message.chat.id
@@ -170,7 +213,7 @@ async def set_name(client, message):
     else:
         await message.reply_text("উদাহরণ: `/setname My_Movie.mp4`")
 
-# --- ৯. বাতিল করা ---
+# --- বাতিল করা ---
 @app.on_message(filters.command("cancel"))
 async def cancel_process(client, message):
     chat_id = message.chat.id
@@ -184,16 +227,20 @@ async def cancel_process(client, message):
     else:
         await message.reply_text("কোনো প্রসেস রানিং নেই।")
 
-# --- ১০. ভিডিও হ্যান্ডলার (সবচেয়ে গুরুত্বপূর্ণ অংশ) ---
-@app.on_message(filters.video)
+# --- ভিডিও হ্যান্ডলার ---
+@app.on_message(filters.video | filters.document)
 async def handle_video(client, message):
+    # ভিডিও অথবা ভিডিও ডকুমেন্ট চেক করা
+    if message.document and not message.document.mime_type.startswith("video/"):
+        return
+
     chat_id = message.chat.id
     if chat_id not in user_data:
         user_data[chat_id] = {"files": [], "total_size": 0, "thumb": None, "state": "none", "filename": f"final_{chat_id}.mp4"}
 
-    # ক) যদি এটি ফেসবুক এডিটের ভিডিও হয়
+    # ক) ফেসবুক এডিট মোড
     if user_data[chat_id].get("state") == "waiting_for_edit":
-        user_data[chat_id]["state"] = "none" # রিসেট
+        user_data[chat_id]["state"] = "none"
         status_msg = await message.reply_text("📥 এডিটিংয়ের জন্য ভিডিও ডাউনলোড হচ্ছে...", quote=True)
         start_time = time.time()
         
@@ -202,27 +249,24 @@ async def handle_video(client, message):
             progress_args=(status_msg, start_time, "📥 ডাউনলোড হচ্ছে...")
         )
         
-        # প্রসেসিং হার্টবিট শুরু
         edit_start_time = time.time()
         heartbeat_task = asyncio.create_task(edit_heartbeat(status_msg, edit_start_time))
         
-        out_v = f"fb_edit_{chat_id}_{time.time()}.mp4"
+        out_v = f"downloads/fb_edit_{chat_id}_{time.time()}.mp4"
         bgm = user_data[chat_id]["music"]
         
-        # --- নতুন সুপার ফাস্ট কমান্ড (৫১২ এমবি র‍্যাম ও স্পিডের জন্য) ---
         cmd = [
             "ffmpeg", "-y", "-i", v_path, "-i", bgm,
             "-filter_complex", 
-            # র‍্যাম বাঁচাতে রেজোলিউশন ৭২০পি করা হয়েছে ও কালার টিউন করা হয়েছে
-            "[0:v]scale=-2:720,eq=saturation=1.4:contrast=1.2:brightness=0.03[v];"
+            "[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,eq=saturation=1.4:contrast=1.2:brightness=0.03[v];"
             "[0:a]volume=1.8[a1];"
             "[1:a]volume=0.03[a2];"
             "[a1][a2]amix=inputs=2:duration=first[a]",
             "-map", "[v]", "-map", "[a]", 
             "-c:v", "libx264", 
-            "-preset", "ultrafast",  # ফাস্ট রেন্ডারিংয়ের জন্য
-            "-crf", "28",            # সাইজ ও র‍্যাম ম্যানেজমেন্ট
-            "-threads", "0",         # সব CPU কোর ব্যবহারের জন্য
+            "-preset", "ultrafast",  
+            "-crf", "28",            
+            "-threads", "0",         
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart", 
             out_v
@@ -231,7 +275,6 @@ async def handle_video(client, message):
         process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         await process.communicate()
         
-        # রেন্ডার শেষ হলে হার্টবিট বন্ধ করা
         heartbeat_task.cancel()
 
         duration = get_video_duration(out_v)
@@ -240,7 +283,7 @@ async def handle_video(client, message):
         await message.reply_video(
             video=out_v, 
             duration=duration, 
-            caption="🎬 **আপনার ফেসবুক শর্টস ভিডিও রেডি!**\n\n(সাউন্ড ও কালার সুপার ফাস্ট মোডে টিউন করা হয়েছে)",
+            caption="🎬 **আপনার ফেসবুক শর্টস ভিডিও রেডি!**\n\n(সাউন্ড ও কালার টিউন করা হয়েছে)",
             thumb=user_data[chat_id].get("thumb"),
             progress=progress_bar,
             progress_args=(status_msg, time.time(), "📤 আপলোড হচ্ছে...")
@@ -256,7 +299,7 @@ async def handle_video(client, message):
         await message.reply_text("⚠️ লিমিট শেষ! আপনি ২জিবি পূর্ণ করে ফেলেছেন। এখন **Done** লিখুন।")
         return
 
-    status_msg = await message.reply_text("📥 ভিডিওটি মার্জ লিস্টে যুক্ত হচ্ছে...", quote=True)
+    status_msg = await message.reply_text("📥 ভিডিওটি ডাউনলোড করা হচ্ছে...", quote=True)
     start_time = time.time()
     
     file_path = await message.download(
@@ -264,16 +307,30 @@ async def handle_video(client, message):
         progress_args=(status_msg, start_time, "📥 ডাউনলোড হচ্ছে...")
     )
 
-    f_size = os.path.getsize(file_path)
-    user_data[chat_id]["files"].append(file_path)
+    # আপলোড করা ভিডিওর ফরম্যাট যাই হোক না কেন, সেটিকে স্ট্যান্ডার্ড এমপি৪ (720p, 30fps) এ রূপান্তর করা হচ্ছে
+    await status_msg.edit_text("⚙️ ভিডিও ফরম্যাট চেক করে স্ট্যান্ডার্ডাইজ করা হচ্ছে...")
+    norm_file_path = f"downloads/norm_{chat_id}_{time.time()}.mp4"
+    
+    is_normalized = await normalize_video(file_path, norm_file_path)
+    
+    # মেমোরি খালি করতে মূল ডনলোডকৃত ফাইল ডিলিট করা হচ্ছে
+    if os.path.exists(file_path): 
+        os.remove(file_path)
+        
+    if is_normalized and os.path.exists(norm_file_path):
+        final_file_path = norm_file_path
+    else:
+        final_file_path = file_path  # কোনো কারণে ব্যর্থ হলে আগের ফাইলটিই ব্যবহার হবে
+
+    f_size = os.path.getsize(final_file_path)
+    user_data[chat_id]["files"].append(final_file_path)
     user_data[chat_id]["total_size"] += f_size
 
-    # বিস্তারিত স্টোরেজ রিপোর্ট
     used_mb = user_data[chat_id]["total_size"] / (1024 * 1024)
     remaining_mb = (MAX_LIMIT - user_data[chat_id]["total_size"]) / (1024 * 1024)
 
     await status_msg.edit_text(
-        f"✅ এপিসোড {len(user_data[chat_id]['files'])} যুক্ত হয়েছে।\n\n"
+        f"✅ এপিসোড {len(user_data[chat_id]['files'])} যুক্ত হয়েছে (ফরম্যাট চেক সম্পূর্ণ)।\n\n"
         f"📊 **স্টোরেজ রিপোর্ট:**\n"
         f"মোট পাঠানো হয়েছে: {used_mb:.2f} MB\n"
         f"খালি আছে: **{remaining_mb:.2f} MB**\n\n"
@@ -297,13 +354,12 @@ async def merge_videos_done(client, message):
             for path in user_data[chat_id]["files"]:
                 f.write(f"file '{os.path.abspath(path)}'\n")
 
-        # ফাস্ট কপি মার্জ
+        # যেহেতু ইনপুটের প্রতিটি ফাইলের স্পেসিফিকেশন এখন হুবহু এক, তাই এই মার্জিংটি অত্যন্ত মসৃণ হবে।
         cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_filename, "-c", "copy", "-movflags", "+faststart", output_filename]
         merge_process = subprocess.run(cmd, capture_output=True, text=True)
 
-        # ফরম্যাট আলাদা হলে এনকোডিং (এখানেও আল্ট্রাফাস্ট দেওয়া হয়েছে স্পিডের জন্য)
         if merge_process.returncode != 0:
-            await status_msg.edit_text("⚠️ ফরম্যাট আলাদা হওয়ায় এনকোডিং হচ্ছে (সময় লাগবে)...")
+            await status_msg.edit_text("⚠️ প্রথম ধাপে সমস্যা হয়েছে, পুনরায় এনকোড করে ট্রাই করা হচ্ছে...")
             cmd_encode = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_filename, "-c:v", "libx264", "-preset", "ultrafast", "-threads", "0", "-movflags", "+faststart", output_filename]
             subprocess.run(cmd_encode, check=True)
 
@@ -332,7 +388,6 @@ async def merge_videos_done(client, message):
         await message.reply_text(f"❌ এরর: {str(e)}")
     
     finally:
-        # সব ক্লিয়ার করা
         if os.path.exists(list_filename): os.remove(list_filename)
         if os.path.exists(output_filename): os.remove(output_filename)
         if chat_id in user_data:
@@ -341,5 +396,5 @@ async def merge_videos_done(client, message):
             user_data[chat_id]["files"] = []
             user_data[chat_id]["total_size"] = 0
 
-print("🚀 বটটি বিস্তারিত ফিচার ও সুপার ফাস্ট স্পিডসহ পূর্ণাঙ্গভাবে সচল!")
+print("🚀 বটটি সচল করা হয়েছে!")
 app.run()
