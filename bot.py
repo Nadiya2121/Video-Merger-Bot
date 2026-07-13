@@ -21,7 +21,6 @@ MAX_LIMIT = 2000 * 1024 * 1024  # ২জিবি লিমিট (বাইট�
 
 app = Client("video_merger", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
-# ইউজার ডাটা স্টোর করার ডিকশনারি
 user_data = {}
 
 # --- অ্যাবসলিউট ডাউনলোড ডিরেক্টরি পাথ সেটআপ ---
@@ -55,35 +54,22 @@ def get_video_duration(file_path):
     except Exception:
         return 0
 
-# --- ভিডিও স্ট্যান্ডার্ডাইজ করার অপ্টিমাইজড ও দ্রুতগতির ফাংশন ---
-async def normalize_video(input_path, output_path):
+# --- আল্ট্রাফাস্ট TS রেমক্সিং ফাংশন (ভিডিওর পিক্সেল টাচ না করে কেবল স্ট্রিম ফরম্যাট ঠিক করে) ---
+async def fast_remux_to_ts(input_path, output_path):
     audio_present = has_audio(input_path)
     
-    # -threads 0 এবং -sws_flags fast_bilinear ব্যবহারের মাধ্যমে প্রসেসিং স্পিড বাড়ানো হয়েছে
+    # ভিডিও স্ট্রিম সরাসরি কপি করা হচ্ছে (-c:v copy), কোনো ডিকোডিং বা রেন্ডারিং হবে না (সুপার ফাস্ট)
     if audio_present:
         cmd = [
-            "ffmpeg", "-y", 
-            "-threads", "0",
-            "-sws_flags", "fast_bilinear",
-            "-i", input_path,
-            "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
-            "-r", "30",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
-            "-c:a", "aac", "-ar", "44100", "-ac", "2",
-            output_path
+            "ffmpeg", "-y", "-i", input_path, 
+            "-c", "copy", "-f", "mpegts", output_path
         ]
     else:
+        # কোনো ফাইলে অডিও না থাকলে মার্জিং ভাঙা এড়াতে নীরব অডিও ট্র্যাক যুক্ত করা হচ্ছে
         cmd = [
-            "ffmpeg", "-y", 
-            "-threads", "0",
-            "-sws_flags", "fast_bilinear",
-            "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100", 
-            "-i", input_path,
-            "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
-            "-r", "30",
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32",
-            "-c:a", "aac", "-shortest",
-            output_path
+            "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+            "-i", input_path, 
+            "-c:v", "copy", "-c:a", "aac", "-shortest", "-f", "mpegts", output_path
         ]
         
     process = await asyncio.create_subprocess_exec(
@@ -314,7 +300,7 @@ async def handle_video(client, message):
         await status_msg.delete()
         return
 
-    # খ) সাধারণ মার্জিং মোড
+    # খ) সাধারণ মার্জিং মোড (এখানে ডাউনলোড করার সাথে সাথে কোনো কনভার্ট হবে না - সম্পূর্ণ ইনস্ট্যান্ট)
     if user_data[chat_id]["total_size"] >= MAX_LIMIT:
         await message.reply_text("⚠️ লিমিট শেষ! আপনি ২জিবি পূর্ণ করে ফেলেছেন। এখন **Done** লিখুন।")
         return
@@ -329,29 +315,16 @@ async def handle_video(client, message):
         progress_args=(status_msg, start_time, "📥 ডাউনলোড হচ্ছে...")
     )
 
-    # স্ট্যান্ডার্ড ফরম্যাটে দ্রুত রূপান্তর
-    await status_msg.edit_text("⚙️ ভিডিও ফরম্যাট স্ট্যান্ডার্ডাইজ করা হচ্ছে...")
-    norm_file_path = os.path.join(DOWNLOAD_DIR, f"norm_{chat_id}_{time.time()}.mp4")
-    
-    is_normalized = await normalize_video(file_path, norm_file_path)
-    
-    if os.path.exists(file_path): 
-        os.remove(file_path)
-        
-    if is_normalized and os.path.exists(norm_file_path):
-        final_file_path = norm_file_path
-    else:
-        final_file_path = file_path
-
-    f_size = os.path.getsize(final_file_path)
-    user_data[chat_id]["files"].append(final_file_path)
+    f_size = os.path.getsize(file_path)
+    user_data[chat_id]["files"].append(file_path)
     user_data[chat_id]["total_size"] += f_size
 
     used_mb = user_data[chat_id]["total_size"] / (1024 * 1024)
     remaining_mb = (MAX_LIMIT - user_data[chat_id]["total_size"]) / (1024 * 1024)
 
+    # ডাউনলোড হওয়ামাত্রই কোনো ল্যাগ ছাড়া সরাসরি কিউতে যুক্ত হয়ে যাবে
     await status_msg.edit_text(
-        f"✅ এপিসোড {len(user_data[chat_id]['files'])} যুক্ত হয়েছে (ফরম্যাট চেক সম্পূর্ণ)।\n\n"
+        f"✅ এপিসোড {len(user_data[chat_id]['files'])} যুক্ত হয়েছে।\n\n"
         f"📊 **স্টোরেজ রিপোর্ট:**\n"
         f"মোট পাঠানো হয়েছে: {used_mb:.2f} MB\n"
         f"খালি আছে: **{remaining_mb:.2f} MB**\n\n"
@@ -366,29 +339,54 @@ async def merge_videos_done(client, message):
         await message.reply_text("❌ মার্জ করতে কমপক্ষে ২টি ভিডিও পাঠাতে হবে!")
         return
 
-    status_msg = await message.reply_text("⚙️ ভিডিওগুলো জোড়া লাগানো হচ্ছে... একটু অপেক্ষা করুন।")
+    status_msg = await message.reply_text("⚙️ ভিডিও ফরম্যাট চেক ও মার্জ প্রসেস করা হচ্ছে (আল্ট্রাফাস্ট মোড)...")
     output_filename = os.path.join(DOWNLOAD_DIR, user_data[chat_id].get("filename", f"merged_{chat_id}.mp4"))
-    list_filename = os.path.join(DOWNLOAD_DIR, f"list_{chat_id}.txt")
-
+    
+    ts_files = []
+    
     try:
-        with open(list_filename, "w") as f:
-            for path in user_data[chat_id]["files"]:
-                f.write(f"file '{os.path.abspath(path)}'\n")
+        # ১. প্রতিটি ভিডিও ফাইলকে প্রথমে অতি দ্রুত MPEG-TS (.ts) ফরম্যাটে রেমক্স করা হচ্ছে।
+        # এটি কোনো ডিকোডিং ছাড়া সরাসরি ফাইল কপি করে, তাই ভিডিও কোয়ালিটি লস হবে না এবং কয়েক সেকেন্ডেই শেষ হবে।
+        for idx, file_path in enumerate(user_data[chat_id]["files"]):
+            ts_path = os.path.join(DOWNLOAD_DIR, f"temp_{chat_id}_{idx}.ts")
+            await fast_remux_to_ts(file_path, ts_path)
+            if os.path.exists(ts_path):
+                ts_files.append(ts_path)
 
-        # দ্রুত কপি মার্জিং
-        cmd = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_filename, "-c", "copy", "-movflags", "+faststart", output_filename]
-        merge_process = subprocess.run(cmd, capture_output=True, text=True)
+        if len(ts_files) < 2:
+            await status_msg.edit_text("❌ ভিডিও কনভার্ট করতে ত্রুটি হয়েছে!")
+            return
 
-        if merge_process.returncode != 0:
-            await status_msg.edit_text("⚠️ প্রথম ধাপে সমস্যা হয়েছে, পুনরায় এনকোড করে ট্রাই করা হচ্ছে...")
+        # ২. .ts ফাইলগুলোকে raw বাইট স্ট্রিমের মাধ্যমে সরাসরি জোড়া লাগানো হচ্ছে (এটি ১-২ সেকেন্ডে মার্জ হয়ে যাবে)
+        concat_input = "concat:" + "|".join(ts_files)
+        
+        cmd = [
+            "ffmpeg", "-y", 
+            "-i", concat_input, 
+            "-c", "copy", 
+            "-movflags", "+faststart", 
+            output_filename
+        ]
+        
+        process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        await process.communicate()
+
+        # যদি কোনো কারণে TS রেমক্স ফেইল করে, তবে অল্টারনেটিভ ফাস্ট এনকোড রান হবে
+        if process.returncode != 0:
+            await status_msg.edit_text("⚠️ রেমক্স সফল হয়নি, অল্টারনেটিভ মোডে ফাস্ট মার্জ হচ্ছে...")
+            list_filename = os.path.join(DOWNLOAD_DIR, f"list_{chat_id}.txt")
+            with open(list_filename, "w") as f:
+                for path in user_data[chat_id]["files"]:
+                    f.write(f"file '{os.path.abspath(path)}'\n")
+            
             cmd_encode = [
-                "ffmpeg", "-y", 
-                "-threads", "0",
-                "-f", "concat", "-safe", "0", "-i", list_filename, 
+                "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_filename, 
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "32", 
-                "-movflags", "+faststart", output_filename
+                "-c:a", "aac", "-movflags", "+faststart", output_filename
             ]
-            subprocess.run(cmd_encode, check=True)
+            process_enc = await asyncio.create_subprocess_exec(*cmd_encode, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            await process_enc.communicate()
+            if os.path.exists(list_filename): os.remove(list_filename)
 
         duration = get_video_duration(output_filename)
         await status_msg.edit_text("📤 মার্জ শেষ! এখন আপলোড হচ্ছে...")
@@ -415,11 +413,18 @@ async def merge_videos_done(client, message):
         await message.reply_text(f"❌ এরর: {str(e)}")
     
     finally:
-        if os.path.exists(list_filename): os.remove(list_filename)
-        if os.path.exists(output_filename): os.remove(output_filename)
+        # ৩. সব ধরনের টেম্পোরারি ক্যাশ ও .ts ফাইল ডিলিট করে মেমোরি ক্লিয়ার করা হচ্ছে
+        for path in ts_files:
+            if os.path.exists(path):
+                os.remove(path)
+                
+        if os.path.exists(output_filename): 
+            os.remove(output_filename)
+            
         if chat_id in user_data:
             for path in user_data[chat_id].get("files", []):
-                if os.path.exists(path): os.remove(path)
+                if os.path.exists(path): 
+                    os.remove(path)
             user_data[chat_id]["files"] = []
             user_data[chat_id]["total_size"] = 0
 
