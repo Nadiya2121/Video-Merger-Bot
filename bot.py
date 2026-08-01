@@ -16,7 +16,7 @@ except ImportError:
 # --- আপনার ভেরিয়েবলসমূহ ---
 API_ID = "19234664"
 API_HASH = "29c2f3b3d115cf1b0231d816deb271f5"
-BOT_TOKEN = "8710959010:AAHfutLem56XMMvNN9GG6n-xwJUiKYA2J7s"
+BOT_TOKEN = "8710959010:AAF1YxwB7iwTXj0kU302tPD06nlx4wbzTx0"
 MAX_LIMIT = 2000 * 1024 * 1024  # ২জিবি লিমিট (বাইটসে)
 
 app = Client("video_merger", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
