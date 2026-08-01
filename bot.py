@@ -19,7 +19,8 @@ API_HASH = "29c2f3b3d115cf1b0231d816deb271f5"
 BOT_TOKEN = "8710959010:AAF1YxwB7iwTXj0kU302tPD06nlx4wbzTx0"
 MAX_LIMIT = 2000 * 1024 * 1024  # ২জিবি লিমিট (বাইটসে)
 
-app = Client("video_merger", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+# সেশন এরর এড়াতে সেশন নাম "video_merger_v2" দেওয়া হলো
+app = Client("video_merger_v2", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 
 # ইউজার ডাটা স্টোর করার ডিকশনারি
 user_data = {}
@@ -40,11 +41,22 @@ def get_video_duration(file_path):
     except Exception:
         return 0
 
-# --- ফাংশন ২: উন্নত প্রোগ্রেস বার (এরর হ্যান্ডলিং ও ডিটেইলস সহ) ---
+# --- ফাংশন ১.১: ভিডিওতে অডিও ট্র্যাক আছে কিনা তা পরীক্ষা করা ---
+def has_audio_stream(file_path):
+    try:
+        cmd = [
+            "ffprobe", "-v", "error", "-show_streams", "-select_streams", "a",
+            "-of", "default=noprint_wrappers=1:nokey=1", file_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return len(result.stdout.strip()) > 0
+    except Exception:
+        return False
+
+# --- ফাংশন ২: উন্নত প্রোগ্রেস বার ---
 async def progress_bar(current, total, status_msg, start_time, action):
     now = time.time()
     diff = now - start_time
-    # প্রতি ৫ সেকেন্ড পরপর আপডেট হবে যাতে টেলিগ্রাম ফ্লাড না করে
     if round(diff % 5.0) == 0 or current == total:
         percentage = current * 100 / total
         speed = current / (diff if diff > 0 else 1)
@@ -68,7 +80,7 @@ async def progress_bar(current, total, status_msg, start_time, action):
         except Exception:
             pass
 
-# --- ফাংশন ৩: প্রসেসিং হার্টবিট (টাইমার দেখানোর জন্য) ---
+# --- ফাংশন ৩: প্রসেসিং হার্টবিট ---
 async def edit_heartbeat(status_msg, start_time, title="ভিডিও প্রসেসিং চলছে..."):
     icons = ["⚙️", "🪄", "⏳", "⌛"]
     idx = 0
@@ -78,15 +90,15 @@ async def edit_heartbeat(status_msg, start_time, title="ভিডিও প্�
             icon = icons[idx % 4]
             text = (f"{icon} **{title}**\n\n"
                     f"⏱ অতিবাহিত সময়: {elapsed} সেকেন্ড\n"
-                    f"🚀 বিভিন্ন ফরম্যাটের ভিডিও স্মুথ করতে রেন্ডারিং হচ্ছে।\n"
+                    f"🚀 ভিডিওগুলোকে স্ট্যান্ডার্ড ফরম্যাটে প্রসেস করা হচ্ছে।\n"
                     f"⚠️ ৫১২এমবি র‍্যাম অপটিমাইজেশন মোড সক্রিয়।")
             await status_msg.edit_text(text)
             idx += 1
-            await asyncio.sleep(8) # প্রতি ৮ সেকেন্ডে একবার আপডেট
+            await asyncio.sleep(8)
     except Exception:
         pass
 
-# --- ৪. স্টার্ট কমান্ড (বিস্তারিত গাইড) ---
+# --- ৪. স্টার্ট কমান্ড ---
 @app.on_message(filters.command("start"))
 async def start(client, message):
     chat_id = message.chat.id
@@ -201,7 +213,6 @@ async def handle_video(client, message):
             progress_args=(status_msg, start_time, "📥 ডাউনলোড হচ্ছে...")
         )
         
-        # প্রসেসিং হার্টবিট শুরু
         edit_start_time = time.time()
         heartbeat_task = asyncio.create_task(edit_heartbeat(status_msg, edit_start_time, "ফেসবুক ভিডিও টিউন হচ্ছে..."))
         
@@ -275,7 +286,7 @@ async def handle_video(client, message):
         f"পরেরটি পাঠান অথবা **Done** লিখুন।"
     )
 
-# --- ১১. মার্জিং শেষ করা (Done কমান্ড - সম্পূর্ণ আপডেট করা) ---
+# --- ১১. মার্জিং শেষ করা (Done কমান্ড) ---
 @app.on_message(filters.text & filters.regex("(?i)^done$"))
 async def merge_videos_done(client, message):
     chat_id = message.chat.id
@@ -283,33 +294,31 @@ async def merge_videos_done(client, message):
         await message.reply_text("❌ মার্জ করতে কমপক্ষে ২টি ভিডিও পাঠাতে হবে!")
         return
 
-    status_msg = await message.reply_text("⚙️ ভিন্ন কোয়ালিটির ভিডিওগুলোকে স্ট্যান্ডার্ড ফরম্যাটে রূপান্তর করে জোড়া লাগানো হচ্ছে...")
+    status_msg = await message.reply_text("⚙️ ভিডিওগুলোকে স্মুথ এবং স্ট্যান্ডার্ড ফরম্যাটে মার্জ করা হচ্ছে...")
     output_filename = user_data[chat_id].get("filename", f"merged_{chat_id}.mp4")
     files_list = user_data[chat_id]["files"]
     num_files = len(files_list)
 
     try:
-        # প্রসেসিং হার্টবিট টাইমার চালু
         start_time = time.time()
         heartbeat_task = asyncio.create_task(edit_heartbeat(status_msg, start_time, "ভিডিও জোড়া লাগানো হচ্ছে..."))
 
-        # ১. FFmpeg কমান্ড তৈরি (Standardization Engine)
         cmd = ["ffmpeg", "-y"]
-        
-        # সব ভিডিও ইনপুট দেওয়া
         for file_path in files_list:
             cmd.extend(["-i", file_path])
 
-        # ২. ডাইনামিক ফিল্টার ফিল্টারিং (রেজোলিউশন ৭২০পি, ৩০ এফপিএস ও অডিও স্টেরিও ফিক্সড)
         filter_complex = ""
-        for i in range(num_files):
+        for i, file_path in enumerate(files_list):
             filter_complex += (
                 f"[{i}:v]scale=1280:720:force_original_aspect_ratio=decrease,"
                 f"pad=1280:720:(1280-iw)/2:(720-ih)/2,setsar=1,fps=30[v{i}]; "
-                f"[{i}:a]aformat=sample_rates=44100:channel_layouts=stereo[a{i}]; "
             )
+            # যদি অডিও না থাকে তবে ডামি সাইলেন্ট অডিও যোগ হবে
+            if has_audio_stream(file_path):
+                filter_complex += f"[{i}:a]aformat=sample_rates=44100:channel_layouts=stereo[a{i}]; "
+            else:
+                filter_complex += f"anullsrc=r=44100:cl=stereo[a{i}]; "
 
-        # সব স্ট্রিম একসাথে সাজানো
         for i in range(num_files):
             filter_complex += f"[v{i}][a{i}]"
         
@@ -320,23 +329,21 @@ async def merge_videos_done(client, message):
             "-map", "[outv]",
             "-map", "[outa]",
             "-c:v", "libx264",
-            "-preset", "ultrafast",  # র‍্যাম ও সিপিইউ বাঁচানোর জন্য আল্ট্রাফাস্ট
-            "-crf", "28",            # সাইজ ও কোয়ালিটি অপটিমাইজেশন
+            "-preset", "ultrafast",  
+            "-crf", "28",            
             "-threads", "0",
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
             output_filename
         ])
 
-        # FFmpeg সাবপ্রসেস চালনা
         process = await asyncio.create_subprocess_exec(*cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         await process.communicate()
 
-        # রেন্ডার শেষে হার্টবিট বন্ধ করা
         heartbeat_task.cancel()
 
         if not os.path.exists(output_filename):
-            raise Exception("ভিডিও রেন্ডারিং করা সম্ভব হয়নি। ফাইলগুলোতে এরর রয়েছে।")
+            raise Exception("ভিডিও রেন্ডারিং করা সম্ভব হয়নি।")
 
         duration = get_video_duration(output_filename)
         await status_msg.edit_text("📤 জোড়া লাগানো সম্পন্ন! এখন আপলোড হচ্ছে...")
@@ -364,7 +371,6 @@ async def merge_videos_done(client, message):
         await message.reply_text(f"❌ এরর: {str(e)}")
     
     finally:
-        # প্রসেস শেষে সব ফাইল ক্লিনআপ
         if os.path.exists(output_filename): 
             os.remove(output_filename)
         if chat_id in user_data:
@@ -374,5 +380,5 @@ async def merge_videos_done(client, message):
             user_data[chat_id]["files"] = []
             user_data[chat_id]["total_size"] = 0
 
-print("🚀 বটটি ফিক্সড ভিডিও এনকোডিং ইঞ্জিনের সাথে সম্পূর্ণ প্রস্তুত!")
+print("🚀 নতুন সেশনে বট সচল করা হয়েছে!")
 app.run()
