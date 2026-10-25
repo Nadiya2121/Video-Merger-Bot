@@ -28,12 +28,15 @@ if not os.path.exists("downloads"):
 
 # --- সময় ফরম্যাট করার ফাংশন ---
 def format_time(seconds):
-    seconds = int(seconds)
-    m, s = divmod(seconds, 60)
-    h, m = divmod(m, 60)
-    if h > 0:
-        return f"{h:02d}:{m:02d}:{s:02d}"
-    return f"{m:02d}:{s:02d}"
+    try:
+        seconds = max(0, int(seconds))
+        m, s = divmod(seconds, 60)
+        h, m = divmod(m, 60)
+        if h > 0:
+            return f"{h:02d}:{m:02d}:{s:02d}"
+        return f"{m:02d}:{s:02d}"
+    except Exception:
+        return "00:00"
 
 # --- ফাংশন ১: ভিডিওর সময় বের করা ---
 def get_video_duration(file_path):
@@ -43,8 +46,10 @@ def get_video_duration(file_path):
             "-of", "default=noprint_wrappers=1:nokey=1", file_path
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
-        val = float(result.stdout.strip())
-        return max(1, int(val))
+        val = result.stdout.strip()
+        if not val or val == "N/A":
+            return 10
+        return max(1, int(float(val)))
     except Exception:
         return 10
 
@@ -95,11 +100,11 @@ async def start(client, message):
     }
     
     welcome_text = (
-        "👋 **সুপারফাস্ট লাইভ প্রোগ্রেস মার্জার বটে স্বাগতম!**\n\n"
+        "👋 **ভিডিও মার্জার বটে স্বাগতম!**\n\n"
         "🎬 **ব্যবহারবিধি:**\n"
         "১. আপনার ভিডিওগুলো একে একে পাঠান।\n"
         "২. সব পাঠানো হলে **Done** লিখুন।\n"
-        "৩. বট সবগুলোকে একই রেজোলিউশনে এনে স্মুথভাবে একটি মাত্র ভিডিও বানিয়ে দেবে (কোনো ল্যাগ ছাড়া)।\n\n"
+        "৩. বট সব ভিডিওকে **একই রেজোলিউশনে লাইভ প্রোগ্রেস সহ** পারফেক্টলি জোড়া লাগিয়ে দেবে।\n\n"
         "⚙️ **কমান্ড:**\n"
         "✏️ `/setname <নাম>` - ফাইলের নাম পরিবর্তন।\n"
         "❌ `/cancel` - প্রসেস বাতিল।"
@@ -117,7 +122,7 @@ async def set_name(client, message):
         if chat_id not in user_data: 
             user_data[chat_id] = {"files": [], "total_size": 0}
         user_data[chat_id]["filename"] = new_name
-        await message.reply_text(f"✅ ফাইনাল ফাইলের নাম সেট করা হয়েছে: `{new_name}`")
+        await message.reply_text(f"✅ ফাইলের নাম সেট করা হয়েছে: `{new_name}`")
     else:
         await message.reply_text("উদাহরণ: `/setname My_Movie.mp4`")
 
@@ -130,7 +135,7 @@ async def cancel_process(client, message):
             if os.path.exists(path): 
                 os.remove(path)
         del user_data[chat_id]
-        await message.reply_text("❌ সব বাতিল এবং ফাইল মুছে ফেলা হয়েছে।")
+        await message.reply_text("❌ সব প্রসেস বাতিল করা হয়েছে।")
     else:
         await message.reply_text("কোনো প্রসেস রানিং নেই।")
 
@@ -165,7 +170,7 @@ async def handle_video(client, message):
         f"পরের ভিডিও পাঠান অথবা মার্জ করতে **Done** লিখুন।"
     )
 
-# --- ৮. লাইভ প্রোগ্রেস সহ সুপার-ফাস্ট মার্জিং (Done কমান্ড) ---
+# --- ৮. ফিক্সড লাইভ প্রোগ্রেস মার্জিং (Done কমান্ড) ---
 @app.on_message(filters.text & filters.regex("(?i)^done$"))
 async def merge_videos_done(client, message):
     chat_id = message.chat.id
@@ -176,13 +181,14 @@ async def merge_videos_done(client, message):
     raw_files = user_data[chat_id]["files"]
     output_filename = user_data[chat_id].get("filename", f"merged_{chat_id}.mp4")
 
-    # মোট সময় বের করা (লাইভ প্রোগ্রেস হিসেবের জন্য)
+    # মোট সময় বের করা
     total_duration = sum(get_video_duration(f) for f in raw_files)
-    
-    status_msg = await message.reply_text("⚡ **মার্জিং শুরু হচ্ছে... প্রোগ্রেস তৈরি হচ্ছে...**")
+    if total_duration <= 0:
+        total_duration = 10
+
+    status_msg = await message.reply_text("⚡ **মার্জিং শুরু হচ্ছে... প্রোগ্রেস লোড হচ্ছে...**")
 
     try:
-        # ১. FFmpeg কমান্ড তৈরি (Ultrafast + Live Progress)
         cmd = ["ffmpeg", "-y"]
         filter_complex = ""
         concat_inputs = ""
@@ -211,16 +217,15 @@ async def merge_videos_done(client, message):
             "-map", "[outv]",
             "-map", "[outa]",
             "-c:v", "libx264",
-            "-preset", "ultrafast",       # সবচেয়ে দ্রুততম এনকোডিং
+            "-preset", "ultrafast",       # দ্রুততম স্পিড
             "-crf", "25",
             "-c:a", "aac",
             "-b:a", "128k",
-            "-progress", "pipe:1",        # লাইভ প্রোগ্রেস পাইপ
+            "-progress", "pipe:1",
             "-movflags", "+faststart",
             output_filename
         ])
 
-        # সাবপ্রসেস চালু
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
         )
@@ -228,7 +233,7 @@ async def merge_videos_done(client, message):
         last_update_time = time.time()
         speed_str = "1.0x"
 
-        # ২. লাইভ প্রোগ্রেস রিড করার লুপ
+        # ২. নিরাপদ প্রোগ্রেস রিডার লুপ (N/A এরর মুক্ত)
         while True:
             line = await proc.stdout.readline()
             if not line:
@@ -237,15 +242,23 @@ async def merge_videos_done(client, message):
             line_str = line.decode('utf-8', errors='ignore').strip()
 
             if line_str.startswith("speed="):
-                speed_str = line_str.split("=")[1].strip()
+                s_val = line_str.split("=")[1].strip()
+                if s_val and s_val != "N/A":
+                    speed_str = s_val
 
             if line_str.startswith("out_time_us="):
-                us = int(line_str.split("=")[1].strip())
+                val_str = line_str.split("=")[1].strip()
+                
+                # N/A বা নন-ডিজিট ডাটা আসলে স্কিপ করবে যাতে ক্র্যাশ না করে
+                if not val_str.isdigit():
+                    continue
+
+                us = int(val_str)
                 current_secs = us / 1_000_000
 
                 now = time.time()
-                # টেলিগ্রামের রেট লিমিট এড়াতে প্রতি ৩.৫ সেকেন্ড পর পর মেসেজ আপডেট হবে
-                if (now - last_update_time >= 3.5) and total_duration > 0:
+                # প্রতি ৩.৫ সেকেন্ড পর মেসেজ আপডেট হবে
+                if (now - last_update_time >= 3.5):
                     percent = min(99.0, (current_secs / total_duration) * 100)
                     progress_blocks = "[{0}{1}]".format(
                         ''.join(["■" for _ in range(int(percent / 10))]),
@@ -268,11 +281,11 @@ async def merge_videos_done(client, message):
         await proc.wait()
 
         if not os.path.exists(output_filename) or os.path.getsize(output_filename) == 0:
-            await status_msg.edit_text("❌ মার্জ করতে সমস্যা হয়েছে! ভিডিও ফাইলগুলো ঠিক আছে কিনা চেক করুন।")
+            await status_msg.edit_text("❌ মার্জ ব্যর্থ হয়েছে! ভিডিও ফাইলগুলো ক্রাশড হতে পারে।")
             return
 
         # ৩. আপলোড প্রসেস
-        await status_msg.edit_text("📤 সফলভাবে মার্জ সম্পন্ন! এখন টেলিগ্রামে আপলোড হচ্ছে...")
+        await status_msg.edit_text("📤 মার্জ সফল! এখন টেলিগ্রামে আপলোড হচ্ছে...")
         duration = get_video_duration(output_filename)
         upload_start = time.time()
 
@@ -281,11 +294,11 @@ async def merge_videos_done(client, message):
             duration=duration,
             thumb=user_data[chat_id].get("thumb"),
             caption=(
-                f"🎬 **ফাইনাল ভিডিও তৈরি সফল!**\n\n"
+                f"🎬 **মার্জ সম্পন্ন হয়েছে!**\n\n"
                 f"📁 মোট ভিডিও: {len(raw_files)}টি\n"
-                f"📐 রেজোলিউশন: 720p HD (স্মুথ প্লেব্যাক)\n"
+                f"📐 রেজোলিউশন: 720p HD\n"
                 f"📊 সাইজ: {os.path.getsize(output_filename)/(1024*1024):.2f} MB\n"
-                f"⏱ সম্পূর্ণ ভিডিওর সময়: {format_time(duration)}"
+                f"⏱ ভিডিওর সময়: {format_time(duration)}"
             ),
             progress=progress_bar,
             progress_args=(status_msg, upload_start, "📤 আপলোড হচ্ছে...")
@@ -297,7 +310,7 @@ async def merge_videos_done(client, message):
         await message.reply_text(f"❌ এরর দেখা দিয়েছে: {str(e)}")
 
     finally:
-        # ফাইল ডিলিট ও মেমোরি রিলিজ
+        # ফাইল ডিলিট ও ক্লিনআপ
         if chat_id in user_data:
             for path in user_data[chat_id].get("files", []):
                 if os.path.exists(path): 
@@ -308,5 +321,5 @@ async def merge_videos_done(client, message):
         if os.path.exists(output_filename):
             os.remove(output_filename)
 
-print("🚀 বট সম্পূর্ণ লাইভ প্রোগ্রেস বার সহ প্রস্তুত!")
+print("🚀 বট সম্পূর্ণভাবে ফিক্সড ও প্রস্তুত!")
 app.run()
