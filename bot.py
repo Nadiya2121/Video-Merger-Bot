@@ -39,19 +39,18 @@ def get_video_duration(file_path):
     except Exception:
         return 10
 
-# --- ফাংশন ২: ভিডিওর রেজোলিউশন বের করা ---
-def get_video_resolution(file_path):
+# --- ফাংশন ২: ভিডিওতে অডিও ট্র্যাক আছে কিনা চেক করা ---
+def check_has_audio(file_path):
     try:
         cmd = [
-            "ffprobe", "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=width,height",
-            "-of", "csv=s=x:p=0", file_path
+            "ffprobe", "-v", "error", "-select_streams", "a:0",
+            "-show_entries", "stream=codec_type",
+            "-of", "default=noprint_wrappers=1:nokey=1", file_path
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
-        res = result.stdout.strip()
-        return res if res else "Unknown"
+        return bool(result.stdout.strip())
     except Exception:
-        return "Unknown"
+        return False
 
 # --- ফাংশন ৩: প্রোগ্রেস বার ---
 async def progress_bar(current, total, status_msg, start_time, action):
@@ -62,8 +61,8 @@ async def progress_bar(current, total, status_msg, start_time, action):
         speed = current / (diff if diff > 0 else 1)
         
         progress = "[{0}{1}]".format(
-            ''.join(["■" for i in range(int(percentage / 10))]),
-            ''.join(["□" for i in range(10 - int(percentage / 10))])
+            ''.join(["■" for _ in range(int(percentage / 10))]),
+            ''.join(["□" for _ in range(10 - int(percentage / 10))])
         )
         
         tmp = (f"**{action}**\n\n"
@@ -88,18 +87,18 @@ async def start(client, message):
         "files": [], 
         "total_size": 0, 
         "thumb": None, 
-        "filename": f"final_video_{chat_id}.mp4"
+        "filename": f"merged_{chat_id}.mp4"
     }
     
     welcome_text = (
-        "👋 **ইনস্ট্যান্ট সুপার-ফাস্ট মার্জার বটে স্বাগতম!**\n\n"
-        "🎬 **ইনস্ট্যান্ট গ্রুপ মার্জ মোড:**\n"
-        "১. আপনার ভিডিওগুলো পাঠান।\n"
-        "২. পাঠানো শেষ হলে **Done** লিখুন।\n"
-        "৩. বট কোনো রেন্ডারিং ছাড়াই **অটোমেটিক ফরম্যাট অনুযায়ী ভাগ করে ২ সেকেন্ডে মার্জ করে দেবে!**\n\n"
+        "👋 **ভিডিও মার্জার বটে স্বাগতম!**\n\n"
+        "🎬 **ব্যবহারবিধি:**\n"
+        "১. আপনার ভিডিওগুলো একে একে পাঠান।\n"
+        "২. সবগুলো পাঠানো শেষে **Done** লিখুন।\n"
+        "৩. বট সব ভিডিওকে **একই রেজোলিউশন ও ফরম্যাটে নিখুঁতভাবে মার্জ** করে একটি মাত্র ভিডিও বানিয়ে দিবে (কোনো আটকে যাওয়া বা ল্যাগ হবে না)।\n\n"
         "⚙️ **অন্যান্য কমান্ড:**\n"
-        "✏️ **/setname** - ফাইলের নাম সেট করুন।\n"
-        "❌ **/cancel** - প্রসেস বাতিল করুন।"
+        "✏️ `/setname <নাম>` - ফাইনাল ভিডিওর নাম সেট করুন।\n"
+        "❌ `/cancel` - প্রসেস বাতিল করুন।"
     )
     await message.reply_text(welcome_text)
 
@@ -109,10 +108,12 @@ async def set_name(client, message):
     chat_id = message.chat.id
     if len(message.command) > 1:
         new_name = message.text.split(None, 1)[1]
-        if not new_name.endswith(".mp4"): new_name += ".mp4"
-        if chat_id not in user_data: user_data[chat_id] = {"files": [], "total_size": 0}
+        if not new_name.endswith(".mp4"): 
+            new_name += ".mp4"
+        if chat_id not in user_data: 
+            user_data[chat_id] = {"files": [], "total_size": 0}
         user_data[chat_id]["filename"] = new_name
-        await message.reply_text(f"✅ নাম সেট করা হয়েছে: `{new_name}`")
+        await message.reply_text(f"✅ ফাইনাল ফাইলের নাম সেট করা হয়েছে: `{new_name}`")
     else:
         await message.reply_text("উদাহরণ: `/setname My_Movie.mp4`")
 
@@ -122,24 +123,25 @@ async def cancel_process(client, message):
     chat_id = message.chat.id
     if chat_id in user_data:
         for path in user_data[chat_id].get("files", []):
-            if os.path.exists(path): os.remove(path)
+            if os.path.exists(path): 
+                os.remove(path)
         del user_data[chat_id]
-        await message.reply_text("❌ সব বাতিল এবং ফাইল মুছে ফেলা হয়েছে।")
+        await message.reply_text("❌ প্রসেস বাতিল করা হয়েছে এবং ফাইলগুলো মুছে ফেলা হয়েছে।")
     else:
         await message.reply_text("কোনো প্রসেস রানিং নেই।")
 
-# --- ৭. ভিডিও হ্যান্ডলার ---
+# --- ৭. ভিডিও গ্রহণ হ্যান্ডলার ---
 @app.on_message(filters.video)
 async def handle_video(client, message):
     chat_id = message.chat.id
     if chat_id not in user_data:
-        user_data[chat_id] = {"files": [], "total_size": 0, "thumb": None, "filename": f"final_{chat_id}.mp4"}
+        user_data[chat_id] = {"files": [], "total_size": 0, "thumb": None, "filename": f"merged_{chat_id}.mp4"}
 
     if user_data[chat_id]["total_size"] >= MAX_LIMIT:
-        await message.reply_text("⚠️ লিমিট শেষ! আপনি ২জিবি পূর্ণ করে ফেলেছেন। **Done** লিখুন।")
+        await message.reply_text("⚠️ ২জিবি সাইজ পূর্ণ হয়ে গেছে! এখন **Done** লিখুন।")
         return
 
-    status_msg = await message.reply_text("📥 ভিডিও যুক্ত হচ্ছে...", quote=True)
+    status_msg = await message.reply_text("📥 ভিডিও ডাউনলোড শুরু হচ্ছে...", quote=True)
     start_time = time.time()
     
     file_path = await message.download(
@@ -154,12 +156,12 @@ async def handle_video(client, message):
     remaining_mb = (MAX_LIMIT - user_data[chat_id]["total_size"]) / (1024 * 1024)
 
     await status_msg.edit_text(
-        f"✅ ভিডিও {len(user_data[chat_id]['files'])} যুক্ত হয়েছে।\n\n"
-        f"📊 মোট সাইজ: {used_mb:.2f} MB (খালি: {remaining_mb:.2f} MB)\n\n"
-        f"পরেরটি পাঠান অথবা **Done** লিখুন।"
+        f"✅ ভিডিও {len(user_data[chat_id]['files'])}টি যুক্ত হয়েছে।\n\n"
+        f"📊 মোট সাইজ: {used_mb:.2f} MB (অবশিষ্ট: {remaining_mb:.2f} MB)\n\n"
+        f"আরও পাঠাতে পারেন অথবা মার্জ করতে **Done** লিখুন।"
     )
 
-# --- ৮. ইনস্ট্যান্ট গ্রুপ মার্জিং (Done কমান্ড) ---
+# --- ৮. পারফেক্ট মার্জিং (Done কমান্ড) ---
 @app.on_message(filters.text & filters.regex("(?i)^done$"))
 async def merge_videos_done(client, message):
     chat_id = message.chat.id
@@ -167,84 +169,102 @@ async def merge_videos_done(client, message):
         await message.reply_text("❌ মার্জ করতে কমপক্ষে ২টি ভিডিও পাঠাতে হবে!")
         return
 
-    status_msg = await message.reply_text("⚡ ফরম্যাট অনুযায়ী গ্রুপে ভাগ করা হচ্ছে...")
     raw_files = user_data[chat_id]["files"]
+    output_filename = user_data[chat_id].get("filename", f"merged_{chat_id}.mp4")
+
+    status_msg = await message.reply_text(
+        "⚙️ **সব ভিডিও একই রেজোলিউশন ও ফরম্যাটে রূপান্তর এবং মার্জ করা হচ্ছে...**\n"
+        "*(ভিডিও সাইজ অনুযায়ী কিছুটা সময় লাগতে পারে, অপেক্ষা করুন)*"
+    )
 
     try:
-        # ১. রেজোলিউশন অনুযায়ী গ্রুপে ভাগ করা
-        format_groups = {}
-        for file_path in raw_files:
-            res = get_video_resolution(file_path)
-            if res not in format_groups:
-                format_groups[res] = []
-            format_groups[res].append(file_path)
+        # ১. FFmpeg কমান্ড তৈরি (স্কেলিং + কনক্যাট ফিল্টার)
+        # রেজোলিউশন 1280x720 (720p) এ ফিক্সড করা হচ্ছে যাতে সব ডিসপ্লেতে স্মুথ চলে
+        cmd = ["ffmpeg", "-y"]
+        filter_complex = ""
+        concat_inputs = ""
 
-        total_groups = len(format_groups)
-        await status_msg.edit_text(f"📊 **মোট ভিডিও:** {len(raw_files)}টি\n🎯 **ফরম্যাট গ্রুপ পাওয়া গেছে:** {total_groups}টি\n\n⚡ জিরো-রেন্ডারিং মার্জিং শুরু হচ্ছে...")
+        for idx, file_path in enumerate(raw_files):
+            cmd.extend(["-i", file_path])
+            dur = get_video_duration(file_path)
+            has_aud = check_has_audio(file_path)
 
-        # ২. প্রতিটা গ্রুপের ভিডিও ১ সেকেন্ডে (-c copy) মার্জ করে পাঠানো
-        group_idx = 1
-        for res, files_in_group in format_groups.items():
-            
-            # যদি নির্দিষ্ট ফরম্যাটের ১টাই ভিডিও থাকে, তবে জোড়া লাগানোর দরকার নাই
-            if len(files_in_group) == 1:
-                await message.reply_video(
-                    video=files_in_group[0],
-                    caption=f"📁 **গ্রুপ {group_idx} ({res}):** ১টি ফাইল (অন্যগুলোর সাথে সাইজ না মিলায় আলাদা দেওয়া হলো)"
-                )
-                group_idx += 1
-                continue
+            # ভিডিও স্কেল ও প্যাড (রেশিও ঠিক রেখে 720p ফিক্সড করা)
+            filter_complex += (
+                f"[{idx}:v]scale=1280:720:force_original_aspect_ratio=decrease,"
+                f"pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v{idx}];"
+            )
 
-            # মার্জিং শুরু (ইনস্ট্যান্ট কপি)
-            list_filename = f"list_{chat_id}_{group_idx}.txt"
-            custom_name = user_data[chat_id].get("filename", f"merged_{chat_id}.mp4")
-            output_filename = f"Group_{group_idx}_{res}_{custom_name}"
+            # কোনো ভিডিওতে যদি অডিও না থাকে তবে সাইলেন্ট অডিও অ্যাড করবে যাতে মার্জ না ভাঙে
+            if has_aud:
+                filter_complex += f"[{idx}:a]aformat=sample_fmts=fltp:sample_rates=44100:channel_layouts=stereo[a{idx}];"
+            else:
+                filter_complex += f"aevalsrc=0:d={dur}[a{idx}];"
 
-            with open(list_filename, "w") as f:
-                for path in files_in_group:
-                    f.write(f"file '{os.path.abspath(path)}'\n")
+            concat_inputs += f"[v{idx}][a{idx}]"
 
-            fast_concat_cmd = [
-                "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", list_filename,
-                "-c", "copy", "-movflags", "+faststart", output_filename
-            ]
+        # সবগুলোকে জোড়া লাগানো
+        filter_complex += f"{concat_inputs}concat=n={len(raw_files)}:v=1:a=1[outv][outa]"
 
-            proc = await asyncio.create_subprocess_exec(*fast_concat_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            await proc.communicate()
+        cmd.extend([
+            "-filter_complex", filter_complex,
+            "-map", "[outv]",
+            "-map", "[outa]",
+            "-c:v", "libx264",
+            "-preset", "veryfast",   # দ্রুত মার্জের জন্য
+            "-crf", "24",            # ভালো কোয়ালিটি ও কম সাইজ
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "+faststart",
+            output_filename
+        ])
 
-            if os.path.exists(output_filename) and os.path.getsize(output_filename) > 0:
-                duration = get_video_duration(output_filename)
-                
-                upload_start = time.time()
-                await message.reply_video(
-                    video=output_filename,
-                    duration=duration,
-                    thumb=user_data[chat_id].get("thumb"),
-                    caption=(
-                        f"🎬 **মার্জ করা ভিডিও (গ্রুপ {group_idx}):**\n\n"
-                        f"📐 **রেজোলিউশন:** {res}\n"
-                        f"✅ **একত্রিত ভিডিও:** {len(files_in_group)}টি\n"
-                        f"📊 **সাইজ:** {os.path.getsize(output_filename)/(1024*1024):.2f} MB\n"
-                        f"⚡ **প্রসেস স্পিড:** ইনস্ট্যান্ট (জিরো রেন্ডারিং)"
-                    )
-                )
+        # সাবপ্রসেস রান করানো
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        _, stderr = await proc.communicate()
 
-            # গ্রুপ ক্লিনআপ
-            if os.path.exists(list_filename): os.remove(list_filename)
-            if os.path.exists(output_filename): os.remove(output_filename)
-            group_idx += 1
+        if not os.path.exists(output_filename) or os.path.getsize(output_filename) == 0:
+            error_details = stderr.decode()[-300:] if stderr else "Unknown error"
+            await status_msg.edit_text(f"❌ মার্জ করতে সমস্যা হয়েছে:\n`{error_details}`")
+            return
+
+        # ২. আপলোড প্রসেস
+        await status_msg.edit_text("📤 সফলভাবে মার্জ হয়েছে! এখন আপলোড করা হচ্ছে...")
+        duration = get_video_duration(output_filename)
+        upload_start = time.time()
+
+        await message.reply_video(
+            video=output_filename,
+            duration=duration,
+            thumb=user_data[chat_id].get("thumb"),
+            caption=(
+                f"🎬 **ফাইনাল ভিডিও মার্জ সফল!**\n\n"
+                f"📁 মোট ভিডিও: {len(raw_files)}টি\n"
+                f"📐 ফিক্সড রেজোলিউশন: 720p (HD)\n"
+                f"📊 সাইজ: {os.path.getsize(output_filename)/(1024*1024):.2f} MB"
+            ),
+            progress=progress_bar,
+            progress_args=(status_msg, upload_start, "📤 আপলোড হচ্ছে...")
+        )
 
         await status_msg.delete()
 
     except Exception as e:
-        await message.reply_text(f"❌ এরর: {str(e)}")
-    
+        await message.reply_text(f"❌ এরর দেখা দিয়েছে: {str(e)}")
+
     finally:
+        # ফাইল ডিলিট ও মেমোরি ক্লিয়ার
         if chat_id in user_data:
             for path in user_data[chat_id].get("files", []):
-                if os.path.exists(path): os.remove(path)
+                if os.path.exists(path): 
+                    os.remove(path)
             user_data[chat_id]["files"] = []
             user_data[chat_id]["total_size"] = 0
+            
+        if os.path.exists(output_filename):
+            os.remove(output_filename)
 
-print("🚀 ইনস্ট্যান্ট গ্রুপ ফাস্ট মার্জার পুরোপুরি সচল!")
+print("🚀 বট সম্পূর্ণভাবে প্রস্তুত!")
 app.run()
